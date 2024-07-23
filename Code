@@ -1,1 +1,219 @@
+My code:
+#include <WiFi.h>
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
 
+// WiFi parameters
+#define WLAN_SSID       "###############################"
+#define WLAN_PASS       "###################"
+
+// Adafruit IO
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883
+#define AIO_USERNAME    "##################################"
+#define AIO_KEY         "##################################"
+
+WiFiClient client;
+//Connects to output_value2 feed
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+Adafruit_MQTT_Publish OutPut_Value = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/OutPut_Value2");
+Adafruit_MQTT_Publish OutPut_Value2 = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/OutPut_Value");
+
+byte moisture;
+
+//Creates variables for watering function.
+int checkset;
+const int relay = 5;
+const int relay2 = 27;
+const int sensor_pin = 32;
+const int sensor_pin2 = 33;
+const int led = 18;
+int output_value;
+int output_value2;
+int switch_number;
+
+//Creates statefunction and its cases.
+enum State {
+  INIT,
+  CONNECT_WIFI,
+  CONNECT_MQTT,
+  READ_SENSOR,
+  WATER_PLANT,
+  WATER_PLANT2,
+  RECHECK_1,
+  PUBLISH_DATA
+};
+
+//Starts the statefunction up.
+State currentState = INIT;
+
+void setup() {
+  Serial.begin(115200); //Connects to serial monitor
+  Serial.println(F("Adafruit IO Example"));
+
+  pinMode(led, OUTPUT);
+  pinMode(relay, OUTPUT);
+  pinMode(relay2, OUTPUT);
+  digitalWrite(relay, LOW);
+  digitalWrite(relay2, LOW);
+}
+
+void loop() {
+  switch (currentState) {
+    case INIT:
+      Serial.println(F("Initializing...")); //Initialization
+      currentState = CONNECT_WIFI; //Next step start-off
+      break;//Goes to next step
+
+    case CONNECT_WIFI:
+      //Connects to wifi using the parameters
+      Serial.print(F("Connecting to WiFi: "));
+      Serial.println(WLAN_SSID);
+      WiFi.begin(WLAN_SSID, WLAN_PASS);
+      //Checks for issues then reconnects if so.
+      while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(F("."));
+
+      }
+      Serial.println();
+
+      //Prints local IP/allows user to know its ready to go on.
+      Serial.println(F("WiFi connected"));
+      Serial.print(F("IP address: "));
+      Serial.println(WiFi.localIP());
+      currentState = CONNECT_MQTT;//Next step start-off
+      break;//Allowing to go to next step
+
+    case CONNECT_MQTT:
+      Serial.print(F("Connecting to Adafruit IO... "));
+      //Connects to adafruit using AIO_KEY put in at the top.
+      if (mqtt.connect() == 0) {
+        Serial.println(F("Adafruit IO Connected!"));
+        currentState = READ_SENSOR;//Next step start-off
+      } else {
+        //Retrying because there were errors
+        Serial.println(F("Connection failed, retrying..."));
+        delay(10000);
+      }
+      break;//Allowing to go to next step
+
+    case READ_SENSOR:
+      checkset = 0;
+      digitalWrite(relay, LOW);//Turns relay/pump off
+      output_value = analogRead(sensor_pin);
+      output_value = map(output_value, 550, 0, 0, 100);//Checks moisture
+      output_value2 = analogRead(sensor_pin2);
+      output_value2 = map(output_value2, 550, 0, 0, 100);//Checks moisture
+      Serial.print("Moisture : ");//Printing value
+      Serial.print(output_value);
+      Serial.println("%");
+      Serial.print("Moisture2 : ");//Printing value
+      Serial.print(output_value2);
+      Serial.println("%");
+      delay(50);
+
+
+      if (output_value <= -200) {
+        currentState = WATER_PLANT;
+      } else {
+        if (output_value2 <= -200) {
+          checkset=1;
+          currentState = WATER_PLANT2;//Next step start-off(forking off No.1)
+        } else {
+          currentState = PUBLISH_DATA;//Next step start-off(forking off No.2)
+        }
+      }
+
+
+
+      //      if (output_value2 <= -200) {
+      //        currentState = WATER_PLANT2;//Next step start-off(forking off No.1)
+      //      } else {
+      //        currentState = PUBLISH_DATA;//Next step start-off(forking off No.2)
+      //      }
+      break;//Allowing to go to next step
+
+
+    case WATER_PLANT:
+      //No.1
+      digitalWrite(led, HIGH);
+      digitalWrite(relay, HIGH);//Pump on/Water pouring
+      Serial.println("Current Flowing");
+      delay(1250);//Water pours for 1250ms
+      digitalWrite(relay, LOW);//Pump off.
+      Serial.println("Pouring stopped");
+      digitalWrite(led, LOW);
+      currentState = RECHECK_1;//Next step start-off(No.2)
+
+      break;//Allowing to go to next step
+
+
+    case RECHECK_1:
+      Serial.println("Recheck");
+      output_value2 = analogRead(sensor_pin2);
+      output_value2 = map(output_value2, 550, 0, 0, 100);//Checks moisture
+      if (output_value2 <= -200) {
+        Serial.println("<= -200 from Recheck");
+        checkset = 1;
+        currentState = WATER_PLANT2;//Next step start-off(forking off No.1)
+      } else {
+        Serial.println("Recheck pub.");
+        currentState = PUBLISH_DATA;//Next step start-off(forking off No.2)
+      }
+
+    case WATER_PLANT2:
+      //No.1
+      
+      if (checkset == 1) {
+        Serial.println(checkset);
+
+        digitalWrite(led, HIGH);
+        digitalWrite(relay2, HIGH);//Pump on/Water pouring
+        Serial.println("Current Flowing");
+        delay(1250);//Water pours for 1250ms
+        digitalWrite(relay2, LOW);//Pump off.
+        Serial.println("Pouring stopped");
+        digitalWrite(led, LOW);
+      }
+      currentState = PUBLISH_DATA;//Next step start-off(No.2)
+
+      break;//Allowing to go to next step
+
+
+
+
+
+    case PUBLISH_DATA:
+      //No.2
+      //Connect to adafruit.
+      if (!mqtt.ping(3)) {
+        // Reconnect to Adafruit IO
+        if (!mqtt.connected()) {
+          currentState = CONNECT_MQTT;
+          break;
+        }
+      }
+      //Print on serial monitor and puts output_value+700 in the output_value2 feed to be plotted into a graph
+      Serial.print("Output Value: ");
+      Serial.println(output_value);
+      moisture = output_value + 700;
+      if (!OutPut_Value.publish(output_value + 700)) {
+        //Fails data send/retrys
+        Serial.println(F("Failed to send data"));
+      } else {
+
+      }
+      if (!OutPut_Value2.publish(output_value2 + 700)) {
+        //Fails data send/retrys
+        Serial.println(F("Failed to send data"));
+      } else {
+        Serial.println(F("Data sent!"));
+        Serial.println("--------------------------");
+      }
+      delay(5000);
+
+      currentState = READ_SENSOR;//Loops again from reading sensor
+      break;//Allowing to go to start of loop.
+  }
+}
